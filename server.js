@@ -33,7 +33,10 @@ const {
   describeChildExit,
   getBufferedStderrLog,
   runChildProcess,
-  readFileWithRetry
+  readFileWithRetry,
+  OFFICE_ACCESS_COOKIE,
+  isOfficeRequestAuthorized,
+  officeCorsOrigin
 } = require('./server-utils');
 
 const LOG_NAMESPACE = 'oo-editors';
@@ -124,14 +127,41 @@ let server = null;
 let shutdownStarted = false;
 app.use(compression());
 const PORT = Number.parseInt(process.env.PORT || '38123', 10);
-const BASE_URL = `http://localhost:${PORT}`;
+// Loopback only. This server reads and overwrites files at whatever absolute
+// path it is given, so it must never be reachable from the network.
+const BIND_HOST = (process.env.OO_EDITOR_BIND_HOST || '127.0.0.1').trim() || '127.0.0.1';
+const ACCESS_TOKEN = (process.env.OO_EDITOR_ACCESS_TOKEN || '').trim();
+const BASE_URL = `http://127.0.0.1:${PORT}`;
 
-// Enable CORS
+// Same-origin only. The editor page and its assets share an origin, so a
+// wildcard here would hand every website on the machine read access to whatever
+// document is open.
 app.use((req, res, next) => {
-  res.header('Access-Control-Allow-Origin', '*');
-  res.header('Access-Control-Allow-Headers', '*');
-  res.header('Access-Control-Expose-Headers', 'X-File-Hash');
+  const origin = officeCorsOrigin(req.headers.origin, PORT);
+  if (origin) {
+    res.header('Access-Control-Allow-Origin', origin);
+    res.header('Vary', 'Origin');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, X-Requested-With');
+    res.header('Access-Control-Expose-Headers', 'X-File-Hash');
+  }
   next();
+});
+
+// Access gate. The desktop host passes the token on /open; every later request
+// from the editor page carries it in a SameSite cookie.
+app.use((req, res, next) => {
+  const allowed = isOfficeRequestAuthorized({
+    reqPath: req.path,
+    query: req.query,
+    cookieHeader: req.headers.cookie,
+    token: ACCESS_TOKEN
+  });
+  if (allowed) {
+    next();
+    return;
+  }
+  logWarn('AUTH', `refused ${req.method} ${req.path} without a valid token`);
+  res.status(403).json({ error: 'forbidden' });
 });
 
 // Parse binary data for POST requests
@@ -954,7 +984,7 @@ app.post('/converter', async (req, res) => {
       });
     }
 
-    const resultUrl = `http://localhost:${PORT}/converted/${outputFilename}`;
+    const resultUrl = `${BASE_URL}/converted/${outputFilename}`;
     logInfo('CONVERTER', `conversion successful: ${resultUrl}`);
 
     res.json({
@@ -1217,7 +1247,14 @@ app.get('/open', (req, res) => {
   const docType = getDocTypeFromFilename(filename);
 
   // Build the document URL with proper encoding
-  const documentUrl = `http://localhost:${PORT}/api/convert?filepath=${encodeURIComponent(filepath)}`;
+  const documentUrl = `${BASE_URL}/api/convert?filepath=${encodeURIComponent(filepath)}`;
+
+  if (ACCESS_TOKEN) {
+    res.setHeader(
+      'Set-Cookie',
+      `${OFFICE_ACCESS_COOKIE}=${encodeURIComponent(ACCESS_TOKEN)}; Path=/; HttpOnly; SameSite=Lax`
+    );
+  }
 
   logInfo('OPEN', `opening ${filename} with offline loader`);
   logInfo('OPEN', `document URL: ${documentUrl}`);
@@ -1567,12 +1604,14 @@ const LISTEN_MAX_RETRIES = 10;
 const LISTEN_RETRY_DELAY_MS = 250;
 // On by default: evict the port holder between retries. Set
 // OO_EDITOR_KILL_PORT_ON_CONFLICT=0/false/no to only wait.
-const KILL_PORT_ON_CONFLICT = isEnvFlagEnabled(process.env.OO_EDITOR_KILL_PORT_ON_CONFLICT || 'true');
+// Off by default: the desktop host picks a free port for every run, so evicting
+// the current holder of the port would only ever kill an unrelated process.
+const KILL_PORT_ON_CONFLICT = isEnvFlagEnabled(process.env.OO_EDITOR_KILL_PORT_ON_CONFLICT || 'false');
 
 startListeningWithRetry({
   maxRetries: LISTEN_MAX_RETRIES,
   attemptListen: ({ onListening, onError }) => {
-    server = app.listen(PORT, onListening);
+    server = app.listen(PORT, BIND_HOST, onListening);
     server.on('error', onError);
   },
   onListening: () => {

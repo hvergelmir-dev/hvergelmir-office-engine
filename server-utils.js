@@ -399,6 +399,85 @@ async function readFileWithRetry(filePath, deps = {}) {
   }
 }
 
+
+/**
+ * Name of the cookie that carries the per-run access token. The desktop host
+ * passes the token on /open and the editor page keeps it for its own requests.
+ */
+const OFFICE_ACCESS_COOKIE = 'oo_editors_access';
+
+/** Constant-time comparison that refuses to leak the token's length. */
+function tokensMatch(candidate, expected) {
+  if (typeof candidate !== 'string' || candidate.length !== expected.length) {
+    return false;
+  }
+  const left = Buffer.from(candidate, 'utf8');
+  const right = Buffer.from(expected, 'utf8');
+  if (left.length !== right.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(left, right);
+}
+
+/** Read one cookie out of a Cookie header without pulling in a parser dependency. */
+function readRequestCookie(cookieHeader, name) {
+  if (typeof cookieHeader !== 'string' || cookieHeader.length === 0) {
+    return '';
+  }
+  for (const part of cookieHeader.split(';')) {
+    const separator = part.indexOf('=');
+    if (separator === -1) {
+      continue;
+    }
+    if (part.slice(0, separator).trim() !== name) {
+      continue;
+    }
+    return decodeURIComponent(part.slice(separator + 1).trim());
+  }
+  return '';
+}
+
+/**
+ * Decide whether a request may reach the editor's routes.
+ *
+ * The server listens on loopback only, but loopback is shared with every other
+ * program and web page on the machine. Without a token, any page could ask it to
+ * read or overwrite any file the user can write. The desktop host therefore
+ * starts it with a random token, passes it once on /open, and the page carries it
+ * in a SameSite cookie that cross-site requests never send.
+ *
+ * An empty token keeps the upstream behaviour, which is what the unit tests and
+ * a plain `bun start` rely on.
+ */
+function isOfficeRequestAuthorized(options) {
+  const { reqPath, query, cookieHeader, token } = options || {};
+  const configured = typeof token === 'string' ? token.trim() : '';
+  if (!configured) {
+    return true;
+  }
+  if (reqPath === '/healthcheck') {
+    return true;
+  }
+  const queryToken = query && typeof query.token === 'string' ? query.token : '';
+  if (reqPath === '/open' && tokensMatch(queryToken, configured)) {
+    return true;
+  }
+  return tokensMatch(readRequestCookie(cookieHeader, OFFICE_ACCESS_COOKIE), configured);
+}
+
+/**
+ * Reflect only the editor's own origin. The page and its assets share an origin,
+ * so nothing legitimate needs a wildcard, and a wildcard would let any website
+ * read this server's responses.
+ */
+function officeCorsOrigin(origin, port) {
+  if (typeof origin !== 'string' || origin.length === 0) {
+    return null;
+  }
+  const allowed = [`http://127.0.0.1:${port}`, `http://localhost:${port}`];
+  return allowed.includes(origin) ? origin : null;
+}
+
 module.exports = {
   getX2TFormatCode,
   getOutputFormatInfo,
@@ -414,5 +493,8 @@ module.exports = {
   describeChildExit,
   getBufferedStderrLog,
   runChildProcess,
-  readFileWithRetry
+  readFileWithRetry,
+  OFFICE_ACCESS_COOKIE,
+  isOfficeRequestAuthorized,
+  officeCorsOrigin
 };
