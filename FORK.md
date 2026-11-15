@@ -34,12 +34,17 @@ tests and a bare `bun start` rely on.
 
 ```bash
 npm install                       # only for local runs/tests
-node scripts/build-release.mjs    # -> dist/hvergelmir-office-engine-windows-x64-<version>.zip + .json
+node scripts/build-release.mjs    # -> dist/hvergelmir-office-engine-windows-x64-<version>.tar.gz + .json
 ```
 
-The script downloads the pinned upstream asset, verifies its sha256, unzips it, replaces `server.js` with a
-bundle built from this repo, and re-exports `dist/.../*.json` with `bytes` + `sha256` for the app to verify
-before extracting. Editors, converter and `node_modules` are upstream's — untouched.
+The script downloads the pinned upstream asset, verifies its sha256, unpacks it, replaces `server.js` with a
+bundle built from this repo, and writes a `.json` next to the archive with `bytes` + `sha256`. Editors,
+converter and `node_modules` are upstream's — untouched.
+
+The archive is a `.tar.gz` rather than a zip because Windows has shipped bsdtar in `System32` since 1803:
+the app extracts it with `tar` and we never carry a zip parser into the product. The desktop app pins
+`version` + `sha256` in its own source and verifies the download before extracting; the `.json` is for
+operators, not an input.
 
 Do **not** rebuild the SDK (`npm run build`): it needs a full grunt build of `sdkjs` per editor and upstream
 already ships the output.

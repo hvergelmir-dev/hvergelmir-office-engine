@@ -4,9 +4,13 @@
  *
  * Upstream ships a single bundled server.js next to the ONLYOFFICE web assets and
  * node_modules. We keep that shape exactly: take the upstream release, replace the
- * bundle with one built from this repo's (patched) sources, rezip. The editors, the
+ * bundle with one built from this repo's (patched) sources, repack. The editors, the
  * converter and node_modules come from upstream untouched, which keeps the artifact
- * byte-for-byte comparable to what upstream ships apart from our own code.
+ * comparable to what upstream ships apart from our own code.
+ *
+ * The artifact is a plain .tar.gz, not a zip: Windows has shipped bsdtar in
+ * System32 since 1803, so the desktop app extracts it with `tar` and we avoid
+ * carrying a zip parser into the product.
  *
  * Usage: node scripts/build-release.mjs [--out dist]
  */
@@ -74,37 +78,40 @@ function bundleServer(outFile) {
 
 async function main() {
   const work = await mkdtemp(path.join(tmpdir(), 'hvergelmir-office-'));
-  const upstreamZip = path.join(work, UPSTREAM_ASSET);
+  const upstreamArchive = path.join(work, UPSTREAM_ASSET);
   const tree = path.join(work, 'tree');
-  await downloadUpstream(upstreamZip);
+  await downloadUpstream(upstreamArchive);
 
   await mkdir(tree, { recursive: true });
-  execFileSync('unzip', ['-q', upstreamZip, '-d', tree], { stdio: 'inherit' });
+  execFileSync('unzip', ['-q', upstreamArchive, '-d', tree], { stdio: 'inherit' });
 
   const bundled = path.join(work, 'server.js');
   bundleServer(bundled);
   await writeFile(path.join(tree, 'server.js'), await readFile(bundled));
 
   const version = JSON.parse(await readFile(path.join(ROOT, 'package.json'), 'utf8')).version;
-  const zipName = `hvergelmir-office-engine-windows-x64-${version}.zip`;
-  const outZip = path.join(OUT_DIR, zipName);
+  const archiveName = `hvergelmir-office-engine-windows-x64-${version}.tar.gz`;
+  const outArchive = path.join(OUT_DIR, archiveName);
   await mkdir(OUT_DIR, { recursive: true });
-  await rm(outZip, { force: true });
-  execFileSync('zip', ['-qr', outZip, '.'], { cwd: tree, stdio: 'inherit' });
+  await rm(outArchive, { force: true });
+  execFileSync('tar', ['-czf', outArchive, '.'], { cwd: tree, stdio: 'inherit' });
 
   const manifest = {
     version,
     upstream: { repo: UPSTREAM_REPO, tag: UPSTREAM_TAG, asset: UPSTREAM_ASSET },
-    file: zipName,
-    bytes: (await stat(outZip)).size,
-    sha256: sha256File(outZip)
+    file: archiveName,
+    bytes: (await stat(outArchive)).size,
+    sha256: sha256File(outArchive)
   };
-  const manifestName = `hvergelmir-office-engine-windows-x64-${version}.json`;
+  // The digest is in the name: these URLs are cached as immutable, so content
+  // must never change under one of them.
+  const manifestName =
+    `hvergelmir-office-engine-windows-x64-${version}-${manifest.sha256.slice(0, 12)}.json`;
   await writeFile(path.join(OUT_DIR, manifestName), `${JSON.stringify(manifest, null, 2)}\n`);
 
   await rm(work, { recursive: true, force: true });
 
-  log(`\n${zipName}`);
+  log(`\n${archiveName}`);
   log(`  bytes  ${manifest.bytes}`);
   log(`  sha256 ${manifest.sha256}`);
   log(`  manifest ${manifestName}`);
