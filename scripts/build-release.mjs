@@ -94,7 +94,24 @@ async function main() {
   const outArchive = path.join(OUT_DIR, archiveName);
   await mkdir(OUT_DIR, { recursive: true });
   await rm(outArchive, { force: true });
-  execFileSync('tar', ['-czf', outArchive, '.'], { cwd: tree, stdio: 'inherit' });
+  // Deterministic: sorted entries, zeroed mtimes/ownership, gzip without its own
+  // timestamp. Same inputs must produce the same sha256, or pinning a digest in
+  // the app would break the moment anyone rebuilds.
+  execFileSync(
+    'tar',
+    [
+      '--sort=name',
+      '--mtime=@0',
+      '--owner=0',
+      '--group=0',
+      '--numeric-owner',
+      '--use-compress-program=gzip -n',
+      '-cf',
+      outArchive,
+      '.'
+    ],
+    { cwd: tree, stdio: 'inherit' }
+  );
 
   const manifest = {
     version,

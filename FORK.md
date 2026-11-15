@@ -41,6 +41,10 @@ The script downloads the pinned upstream asset, verifies its sha256, unpacks it,
 bundle built from this repo, and writes a `.json` next to the archive with `bytes` + `sha256`. Editors,
 converter and `node_modules` are upstream's — untouched.
 
+The build is deterministic (sorted entries, zeroed mtimes, no gzip timestamp), so the same inputs always give
+the same sha256. A URL is nonetheless immutable — if the bytes change, **bump the version**: the published URL
+is cached for a year in front of us and cannot be talked out of what it already holds.
+
 The archive is a `.tar.gz` rather than a zip because Windows has shipped bsdtar in `System32` since 1803:
 the app extracts it with `tar` and we never carry a zip parser into the product. The desktop app pins
 `version` + `sha256` in its own source and verifies the download before extracting; the `.json` is for
