@@ -53,6 +53,14 @@ operators, not an input.
 Do **not** rebuild the SDK (`npm run build`): it needs a full grunt build of `sdkjs` per editor and upstream
 already ships the output.
 
+## The font list is not in the archive
+
+`assets/onlyoffice-fontdata/AllFonts.js` describes the fonts of the machine it was
+generated on, so shipping one would give every user someone else's font list. The app
+runs `converter/allfontsgen.exe --use-system=true` after unpacking, which is the same
+generator upstream runs during setup, and only then starts the server — it refuses to
+start without the metadata.
+
 ## How the desktop app runs it
 
 `ELECTRON_RUN_AS_NODE=1` with the app's own Electron binary, `PORT` chosen by the host, `OO_EDITOR_ACCESS_TOKEN`
